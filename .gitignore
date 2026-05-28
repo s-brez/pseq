@@ -1,0 +1,5 @@
+*.tgz
+.DS_Store
+node_modules/
+npm/pseq/bin/*/
+target/

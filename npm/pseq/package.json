@@ -1,0 +1,38 @@
+{
+  "name": "@s-brez/pseq",
+  "version": "0.0.2",
+  "description": "A simple prompt and command sequencer for working with CLI agents.",
+  "main": "bin/pseq.js",
+  "scripts": {
+    "stage:binary": "node scripts/stage-binary.js",
+    "verify:binaries": "node scripts/verify-binaries.js",
+    "verify:metadata": "node scripts/verify-release.js --skip-pack --skip-binaries",
+    "verify:release": "node scripts/verify-release.js",
+    "smoke:packed": "node scripts/smoke-packed-install.js",
+    "prepack": "node scripts/verify-release.js --skip-pack --quiet",
+    "pack:dry-run": "npm pack --dry-run",
+    "test": "node scripts/check-wrapper-version.js"
+  },
+  "keywords": [
+    "prompt",
+    "llm",
+    "cli",
+    "sequencer",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin/"
+  ],
+  "bin": {
+    "pseq": "bin/pseq.js"
+  }
+}
