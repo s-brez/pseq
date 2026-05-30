@@ -1,7 +1,7 @@
 {
   "name": "@s-brez/pseq",
-  "version": "0.0.2",
-  "description": "A simple prompt and command sequencer for working with CLI agents.",
+  "version": "0.0.3",
+  "description": "Simple prompt and command sequencer for CLI agent automation.",
   "main": "bin/pseq.js",
   "scripts": {
     "stage:binary": "node scripts/stage-binary.js",
@@ -20,6 +20,11 @@
     "sequencer",
     "automation"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/s-brez/pseq.git",
+    "directory": "npm/pseq"
+  },
   "author": "",
   "license": "MIT",
   "type": "module",

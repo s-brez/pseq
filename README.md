@@ -1,6 +1,14 @@
-# pseq
+[![CI](https://github.com/s-brez/pseq/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/s-brez/pseq/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/%40s-brez%2Fpseq)](https://www.npmjs.com/package/@s-brez/pseq)
+[![license](https://img.shields.io/npm/l/%40s-brez%2Fpseq)](LICENSE)
 
-`pseq` is a simple prompt and command sequencer for CLI agent session management.
+`pseq` is a simple prompt and command sequencer for light CLI agent automation.
+
+Use `pseq` to:
+* configure and run CLI agent loops
+* use non-prompt commands in CLI agent loops
+* replace or extend written procedures that would otherwise be text prose in a SKILL.md file
+* reduce context burden and token usage for known workflows
 
 ## Install
 
@@ -46,60 +54,6 @@ Options:
 
 Use `pseq <command> --help` for command-specific help.
 
-## Concepts
-
-`fragment`
-: A Markdown prompt file. Fragments may include variables like `{{target}}` or other fragments with `{{pseq.fragment.<fragment-ref>}}`.
-
-`sequence`
-: An ordered list of fragments. A sequence renders to one text document. `pseq run` sends each top-level fragment as a separate turn.
-
-`capture`
-: Imported prompt text from stdin, a file, or a supported local harness source. Captures can be promoted to fragments and a sequence.
-
-`runner`
-: A named command stored in the prompt store config. `pseq` passes prompt text to the command on stdin.
-
-
-Supported capture sources are `stdin`, `codex`, `claude-code`, `openhands`, and `opencode`.
-
-
 ## Examples 
 
 (todo) 
-
-e.g Run multiple iterations with feedback loop: ...
-
-
-## JSON
-
-```bash
-pseq --json fragment list
-pseq --json sequence show Review
-pseq --json render Review --var target=src/run.rs
-pseq --json run Review --max-captured-output 65536 -- tee /tmp/pseq-turn.txt
-```
-
-With `--json`, successful commands write one JSON value to stdout.
-
-Application errors use a JSON error envelope on stderr.
-
-## Files
-
-A prompt store is a Git repository:
-
-```text
-fragments/**/*.md
-sequences/**/*.json
-captures/**/*.json
-renders/**/*.md
-config.toml
-.git/ or .git file
-```
-
-Mutating commands commit by default unless `--no-commit` is supplied. Read commands do not create history entries.
-
-Treat stores like source code.
-
-`pseq` does not clone, pull, push, configure remotes, or authenticate to remotes.
-

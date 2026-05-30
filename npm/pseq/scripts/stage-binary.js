@@ -22,7 +22,7 @@ if (!entry) {
 }
 
 const source = options.source
-  ? resolve(options.source)
+  ? resolve(repoRoot, options.source)
   : defaultSource(entry.binary);
 
 if (!existsSync(source)) {

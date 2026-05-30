@@ -1,0 +1,145 @@
+#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(here, "..");
+const version = process.argv[2];
+
+if (!version || process.argv.length > 3) {
+  fail("usage: scripts/prepare-release <version>");
+}
+
+if (!isReleaseVersion(version)) {
+  fail("version must look like 0.0.3 or 0.0.3-rc.1");
+}
+
+const cargoTomlPath = join(repoRoot, "Cargo.toml");
+const cargoLockPath = join(repoRoot, "Cargo.lock");
+const packageJsonPath = join(repoRoot, "npm", "pseq", "package.json");
+
+writeFileSync(
+  cargoTomlPath,
+  replaceCargoTomlPackageVersion(readText(cargoTomlPath), version),
+);
+writeFileSync(
+  cargoLockPath,
+  replaceCargoLockPackageVersion(readText(cargoLockPath), "pseq", version),
+);
+writePackageVersion(packageJsonPath, version);
+
+run(process.execPath, [
+  join(repoRoot, "npm", "pseq", "scripts", "verify-release.js"),
+  "--repo-root",
+  repoRoot,
+  "--package-root",
+  join(repoRoot, "npm", "pseq"),
+  "--skip-binaries",
+  "--skip-pack",
+  "--version",
+  version,
+]);
+
+console.log(`prepared pseq ${version}`);
+
+function replaceCargoTomlPackageVersion(content, nextVersion) {
+  const lines = content.split(/\r?\n/);
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
+  let inPackageSection = false;
+  let replaced = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim();
+    if (trimmed === "[package]") {
+      inPackageSection = true;
+      continue;
+    }
+    if (inPackageSection && trimmed.startsWith("[")) {
+      break;
+    }
+    if (inPackageSection && /^\s*version\s*=/.test(lines[index])) {
+      lines[index] = lines[index].replace(
+        /^(\s*version\s*=\s*)"[^"]*"(.*)$/,
+        `$1"${nextVersion}"$2`,
+      );
+      replaced = true;
+      break;
+    }
+  }
+
+  if (!replaced) {
+    fail("Cargo.toml [package] version was not found");
+  }
+
+  return preserveFinalNewline(content, lines.join(eol));
+}
+
+function replaceCargoLockPackageVersion(content, packageName, nextVersion) {
+  const lines = content.split(/\r?\n/);
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
+  let packageStart = -1;
+  let nameMatched = false;
+
+  for (let index = 0; index <= lines.length; index += 1) {
+    const trimmed = lines[index]?.trim();
+    if (trimmed === "[[package]]" || index === lines.length) {
+      if (packageStart >= 0 && nameMatched) {
+        for (let cursor = packageStart + 1; cursor < index; cursor += 1) {
+          if (/^\s*version\s*=/.test(lines[cursor])) {
+            lines[cursor] = lines[cursor].replace(
+              /^(\s*version\s*=\s*)"[^"]*"(.*)$/,
+              `$1"${nextVersion}"$2`,
+            );
+            return preserveFinalNewline(content, lines.join(eol));
+          }
+        }
+        fail(`Cargo.lock package ${packageName} has no version field`);
+      }
+
+      packageStart = index;
+      nameMatched = false;
+      continue;
+    }
+
+    if (packageStart >= 0 && trimmed === `name = "${packageName}"`) {
+      nameMatched = true;
+    }
+  }
+
+  fail(`Cargo.lock package ${packageName} was not found`);
+}
+
+function writePackageVersion(path, nextVersion) {
+  const packageJson = JSON.parse(readText(path));
+  packageJson.version = nextVersion;
+  writeFileSync(path, `${JSON.stringify(packageJson, null, 2)}\n`);
+}
+
+function readText(path) {
+  return readFileSync(path, "utf8");
+}
+
+function preserveFinalNewline(original, next) {
+  return original.endsWith("\n") && !next.endsWith("\n") ? `${next}\n` : next;
+}
+
+function isReleaseVersion(value) {
+  return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value);
+}
+
+function run(command, args) {
+  const result = spawnSync(command, args, {
+    cwd: repoRoot,
+    stdio: "inherit",
+  });
+  if (result.status !== 0 || result.error) {
+    process.exit(result.status ?? 1);
+  }
+}
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}

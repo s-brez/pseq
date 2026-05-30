@@ -1,0 +1,300 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/release.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "npm/pseq/**"
+      - "scripts/prepare-release"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional version to validate for a dry run"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      real_release: ${{ steps.version.outputs.real_release }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt clippy
+
+      - name: Require annotated tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          object_type="$(git cat-file -t "refs/tags/${GITHUB_REF_NAME}")"
+          if [[ "$object_type" != "tag" ]]; then
+            echo "Release tags must be annotated tags; got object type: $object_type" >&2
+            exit 1
+          fi
+
+      - name: Validate source versions
+        shell: bash
+        env:
+          DRY_RUN_VERSION: ${{ github.event.inputs.version || '' }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            node npm/pseq/scripts/verify-release.js --skip-binaries --skip-pack --tag "$GITHUB_REF_NAME"
+          elif [[ -n "$DRY_RUN_VERSION" ]]; then
+            node npm/pseq/scripts/verify-release.js --skip-binaries --skip-pack --version "$DRY_RUN_VERSION"
+          else
+            node npm/pseq/scripts/verify-release.js --skip-binaries --skip-pack
+          fi
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --no-deps --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Export version
+        id: version
+        shell: bash
+        env:
+          DRY_RUN_VERSION: ${{ github.event.inputs.version || '' }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "real_release=true" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$DRY_RUN_VERSION" ]]; then
+            echo "version=$DRY_RUN_VERSION" >> "$GITHUB_OUTPUT"
+            echo "real_release=false" >> "$GITHUB_OUTPUT"
+          else
+            version="$(node -e 'const fs = require("node:fs"); const packageJson = JSON.parse(fs.readFileSync("npm/pseq/package.json", "utf8")); process.stdout.write(packageJson.version);')"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "real_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            os: ubuntu-24.04
+            binary: pseq
+            source: target/release/pseq
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+            binary: pseq
+            source: target/release/pseq
+          - platform: darwin-x64
+            os: macos-15-intel
+            binary: pseq
+            source: target/release/pseq
+          - platform: darwin-arm64
+            os: macos-15
+            binary: pseq
+            source: target/release/pseq
+          - platform: win32-x64
+            os: windows-2025
+            binary: pseq.exe
+            source: target/release/pseq.exe
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release --locked
+
+      - name: Stage binary
+        shell: bash
+        run: npm --prefix npm/pseq run stage:binary -- --platform "${{ matrix.platform }}" --source "${{ matrix.source }}"
+
+      - name: Check wrapper version
+        shell: bash
+        run: npm --prefix npm/pseq test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pseq-${{ matrix.platform }}
+          path: npm/pseq/bin/${{ matrix.platform }}/${{ matrix.binary }}
+          if-no-files-found: error
+
+  package:
+    name: Package
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage release binaries
+        shell: bash
+        run: |
+          npm --prefix npm/pseq run stage:binary -- --platform linux-x64 --source artifacts/pseq-linux-x64/pseq
+          npm --prefix npm/pseq run stage:binary -- --platform linux-arm64 --source artifacts/pseq-linux-arm64/pseq
+          npm --prefix npm/pseq run stage:binary -- --platform darwin-x64 --source artifacts/pseq-darwin-x64/pseq
+          npm --prefix npm/pseq run stage:binary -- --platform darwin-arm64 --source artifacts/pseq-darwin-arm64/pseq
+          npm --prefix npm/pseq run stage:binary -- --platform win32-x64 --source artifacts/pseq-win32-x64/pseq.exe
+
+      - name: Verify release package
+        shell: bash
+        env:
+          REAL_RELEASE: ${{ needs.validate.outputs.real_release }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          if [[ "$REAL_RELEASE" == "true" ]]; then
+            node npm/pseq/scripts/verify-release.js --tag "$GITHUB_REF_NAME"
+          else
+            node npm/pseq/scripts/verify-release.js --version "$VERSION"
+          fi
+
+      - name: Pack npm package
+        id: pack
+        shell: bash
+        run: |
+          cd npm/pseq
+          pack_json="$(npm pack --json)"
+          tarball="$(node -e 'const fs = require("node:fs"); const packs = JSON.parse(fs.readFileSync(0, "utf8")); process.stdout.write(packs[0].filename);' <<< "$pack_json")"
+          echo "tarball=npm/pseq/$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test packed package
+        shell: bash
+        run: npm --prefix npm/pseq run smoke:packed -- --tarball "$PWD/${{ steps.pack.outputs.tarball }}"
+
+      - name: Prepare GitHub Release assets
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          mkdir -p dist asset-work
+          cp "${{ steps.pack.outputs.tarball }}" dist/
+
+          mkdir -p asset-work/linux-x64
+          cp npm/pseq/bin/linux-x64/pseq asset-work/linux-x64/
+          tar -C asset-work/linux-x64 -czf "dist/pseq-${VERSION}-linux-x64.tar.gz" pseq
+
+          mkdir -p asset-work/linux-arm64
+          cp npm/pseq/bin/linux-arm64/pseq asset-work/linux-arm64/
+          tar -C asset-work/linux-arm64 -czf "dist/pseq-${VERSION}-linux-arm64.tar.gz" pseq
+
+          mkdir -p asset-work/darwin-x64
+          cp npm/pseq/bin/darwin-x64/pseq asset-work/darwin-x64/
+          tar -C asset-work/darwin-x64 -czf "dist/pseq-${VERSION}-darwin-x64.tar.gz" pseq
+
+          mkdir -p asset-work/darwin-arm64
+          cp npm/pseq/bin/darwin-arm64/pseq asset-work/darwin-arm64/
+          tar -C asset-work/darwin-arm64 -czf "dist/pseq-${VERSION}-darwin-arm64.tar.gz" pseq
+
+          mkdir -p asset-work/win32-x64
+          cp npm/pseq/bin/win32-x64/pseq.exe asset-work/win32-x64/
+          tar -C asset-work/win32-x64 -czf "dist/pseq-${VERSION}-win32-x64.tar.gz" pseq.exe
+
+          find dist -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    if: needs.validate.outputs.real_release == 'true'
+    needs:
+      - validate
+      - package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Publish npm package
+        shell: bash
+        run: |
+          tarball="$(find dist -maxdepth 1 -name "*.tgz" -print -quit)"
+          if [[ -z "$tarball" ]]; then
+            echo "missing npm package tarball in release assets" >&2
+            exit 1
+          fi
+          npm publish "$tarball"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --title "pseq $VERSION" \
+            --notes-from-tag
