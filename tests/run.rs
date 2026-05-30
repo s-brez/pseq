@@ -7,6 +7,8 @@ use common::{
     TestStore, assert_git_clean, assert_success, git, git_head, path_str, pseq, pseq_bin,
     pseq_in_dir_with_env, pseq_with_stdin, stderr_json, stdout_json,
 };
+#[cfg(unix)]
+use common::{pseq_command_in_own_process_group, pseq_in_own_process_group};
 
 #[path = "run/capture_output.rs"]
 mod capture_output;

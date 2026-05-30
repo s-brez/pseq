@@ -1,10 +1,9 @@
-mod adapters;
 mod command;
 mod diagnostics;
+mod harnesses;
 mod model;
 mod options;
 mod process;
-mod session;
 mod types;
 
 pub const DEFAULT_MAX_CAPTURED_OUTPUT: usize = 1024 * 1024;

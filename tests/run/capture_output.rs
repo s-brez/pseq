@@ -29,6 +29,8 @@ fn run_json_captures_runner_output_without_mixing_stdout() {
     assert_eq!(json["completed_turns"], 1);
     assert_eq!(json["success"], true);
     assert_eq!(json["turns"][0]["fragment"]["name"], "Only");
+    assert!(json["turns"][0]["pid"].as_u64().unwrap() > 0);
+    assert_eq!(json["turns"][0]["termination"], "exit");
     assert!(
         json["turns"][0]["stdout"]
             .as_str()

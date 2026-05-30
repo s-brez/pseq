@@ -1,6 +1,5 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::ExitStatus;
 use std::string::FromUtf8Error;
 use std::time::SystemTimeError;
 
@@ -157,6 +156,9 @@ pub enum AppError {
         command: Vec<String>,
         source: io::Error,
     },
+
+    #[error("failed to install runner signal forwarding: {message}")]
+    RunnerSignalForwarding { message: String },
 
     #[error("store is invalid: {path} ({issues} issue(s)); run `pseq doctor --store {path}`")]
     InvalidStore { path: PathBuf, issues: usize },
@@ -329,6 +331,7 @@ impl AppError {
             Self::RunnerOutputUnavailable { .. } => "runner_output_unavailable",
             Self::RunnerReadOutput { .. } => "runner_read_output_failed",
             Self::RunnerWait { .. } => "runner_wait_failed",
+            Self::RunnerSignalForwarding { .. } => "runner_signal_forwarding_failed",
             Self::InvalidStore { .. } => "invalid_store",
             Self::InvalidFragmentName { .. } => "invalid_fragment_name",
             Self::FragmentNotFound { .. } => "fragment_not_found",
@@ -372,10 +375,6 @@ impl AppError {
             _ => 1,
         }
     }
-}
-
-pub(crate) fn exit_code(status: ExitStatus) -> i32 {
-    status.code().unwrap_or(1)
 }
 
 #[derive(Debug, Serialize)]
