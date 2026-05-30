@@ -4,16 +4,15 @@ use crate::error::AppError;
 use crate::render;
 use crate::store;
 
-use super::adapters::prepare_runner_command;
 use super::diagnostics::{
     should_write_diagnostics, write_runner_failure_diagnostic, write_turn_diagnostic,
 };
+use super::harnesses::{RunnerHarnessSession, prepare_runner_command};
 use super::model::ProcessTurnOutput;
 use super::options::{
     feedback_variable, load_base_variables, load_feedback_seed, output_mode, resolve_runner,
     validate_options,
 };
-use super::session::RunnerSession;
 use super::types::*;
 
 pub fn run_sequence(
@@ -50,13 +49,13 @@ pub fn run_sequence(
     let turns_per_iteration = first_sequence.turns.len();
     let total_turns = turns_per_iteration * options.iterations;
     let output_mode = output_mode(&options);
-    let mut run_session = RunnerSession::new();
+    let mut run_session = RunnerHarnessSession::new();
 
     let mut turns = Vec::new();
     let mut failed_turn = None;
     let mut failed_iteration = None;
     'iterations: for iteration in 1..=options.iterations {
-        let mut iteration_session = RunnerSession::new();
+        let mut iteration_session = RunnerHarnessSession::new();
         let sequence = if iteration == 1 || options.feedback_from.is_none() {
             first_sequence.clone()
         } else {
@@ -183,14 +182,14 @@ fn run_turn_output(
         index: turn.index,
         fragment: turn.fragment.clone(),
         command,
-        exit_code: process.exit_code,
         pid: process.pid,
         termination: process.termination.as_str().to_owned(),
-        stdout: capture_output.then_some(process.stdout.clone()).flatten(),
-        stderr: capture_output.then_some(process.stderr.clone()).flatten(),
+        exit_code: process.exit_code,
         signal: process.signal,
         signal_name: process.signal_name.map(str::to_owned),
         core_dumped: process.core_dumped,
+        stdout: capture_output.then_some(process.stdout.clone()).flatten(),
+        stderr: capture_output.then_some(process.stderr.clone()).flatten(),
         stdout_bytes: capture_output.then_some(process.stdout_bytes).flatten(),
         stderr_bytes: capture_output.then_some(process.stderr_bytes).flatten(),
         stdout_truncated: capture_output.then_some(process.stdout_truncated).flatten(),
