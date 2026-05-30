@@ -282,7 +282,7 @@ jobs:
       - name: Publish npm package
         shell: bash
         run: |
-          tarball="$(find dist -maxdepth 1 -name "*.tgz" -print -quit)"
+          tarball="$(find "$PWD/dist" -maxdepth 1 -name "*.tgz" -print -quit)"
           if [[ -z "$tarball" ]]; then
             echo "missing npm package tarball in release assets" >&2
             exit 1
