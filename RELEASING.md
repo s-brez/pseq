@@ -31,7 +31,7 @@ Restrict `v*` tag creation to maintainers if tag rulesets are available for the 
 
 CI runs on branch pushes and pull requests.
 
-The release workflow has a branch-push and pull-request dry run for release/package changes. It builds all platform binaries, stages the npm package, packs the tarball, smoke-tests the packed package, prepares release archives, and uploads those archives as workflow artifacts. It does not publish to npm or create a GitHub Release unless the workflow is running from a pushed annotated `v*` tag.
+The release workflow has a pull-request dry run for release/package changes. It builds all platform binaries, stages the npm package, packs the tarball, smoke-tests the packed package, prepares release archives, and uploads those archives as workflow artifacts. It does not publish to npm or create a GitHub Release unless the workflow is running from a pushed annotated `v*` tag.
 
 After the workflow exists on `master`, it can also be manually dry-run from the GitHub Actions UI with the `workflow_dispatch` trigger. Manual runs are always dry runs.
 
