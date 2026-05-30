@@ -1,6 +1,5 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::ExitStatus;
 use std::string::FromUtf8Error;
 use std::time::SystemTimeError;
 
@@ -374,9 +373,6 @@ impl AppError {
     }
 }
 
-pub(crate) fn exit_code(status: ExitStatus) -> i32 {
-    status.code().unwrap_or(1)
-}
 
 #[derive(Debug, Serialize)]
 struct ErrorEnvelope<'a> {

@@ -68,7 +68,15 @@ pub struct RunTurnOutput {
     pub index: usize,
     pub fragment: RenderedTurnFragment,
     pub command: Vec<String>,
+    pub pid: u32,
+    pub termination: String,
     pub exit_code: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub core_dumped: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stdout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

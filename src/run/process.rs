@@ -1,10 +1,19 @@
 use std::io::{self, Read, Write};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 
-use crate::error::{self, AppError};
+use crate::error::AppError;
 
 use super::model::*;
+
+#[derive(Debug)]
+struct ClassifiedProcessStatus {
+    termination: ProcessTermination,
+    exit_code: i32,
+    signal: Option<i32>,
+    signal_name: Option<&'static str>,
+    core_dumped: Option<bool>,
+}
 
 pub(super) fn run_turn_command(
     argv: &[String],
@@ -29,6 +38,7 @@ pub(super) fn run_turn_command(
         command: command_label.clone(),
         source,
     })?;
+    let pid = child.id();
     let stdin = child
         .stdin
         .take()
@@ -86,11 +96,16 @@ pub(super) fn run_turn_command(
         })??;
     let stdout = stdout_reader.map(join_output_reader).transpose()?;
     let stderr = stderr_reader.map(join_output_reader).transpose()?;
-    let exit_code = error::exit_code(status);
+    let status = classify_process_status(status);
 
     Ok(ProcessTurnOutput {
-        exit_code,
-        success: status.success(),
+        pid,
+        termination: status.termination,
+        exit_code: status.exit_code,
+        success: status.termination == ProcessTermination::Exit && status.exit_code == 0,
+        signal: status.signal,
+        signal_name: status.signal_name,
+        core_dumped: status.core_dumped,
         stdout: stdout.as_ref().map(|output| output.text.clone()),
         stderr: stderr.as_ref().map(|output| output.text.clone()),
         stdout_bytes: stdout.as_ref().map(|output| output.bytes),
@@ -101,6 +116,79 @@ pub(super) fn run_turn_command(
 }
 
 fn spawn_stdin_writer(
+#[cfg(unix)]
+fn classify_process_status(status: ExitStatus) -> ClassifiedProcessStatus {
+    use std::os::unix::process::ExitStatusExt;
+
+    if let Some(exit_code) = status.code() {
+        return ClassifiedProcessStatus {
+            termination: ProcessTermination::Exit,
+            exit_code,
+            signal: None,
+            signal_name: None,
+            core_dumped: None,
+        };
+    }
+
+    if let Some(signal) = status.signal() {
+        return ClassifiedProcessStatus {
+            termination: ProcessTermination::Signal,
+            exit_code: signal.checked_add(128).unwrap_or(1),
+            signal: Some(signal),
+            signal_name: unix_signal_name(signal),
+            core_dumped: Some(status.core_dumped()),
+        };
+    }
+
+    ClassifiedProcessStatus {
+        termination: ProcessTermination::Unknown,
+        exit_code: 1,
+        signal: None,
+        signal_name: None,
+        core_dumped: None,
+    }
+}
+
+#[cfg(not(unix))]
+fn classify_process_status(status: ExitStatus) -> ClassifiedProcessStatus {
+    if let Some(exit_code) = status.code() {
+        return ClassifiedProcessStatus {
+            termination: ProcessTermination::Exit,
+            exit_code,
+            signal: None,
+            signal_name: None,
+            core_dumped: None,
+        };
+    }
+
+    ClassifiedProcessStatus {
+        termination: ProcessTermination::Unknown,
+        exit_code: 1,
+        signal: None,
+        signal_name: None,
+        core_dumped: None,
+    }
+}
+
+#[cfg(unix)]
+fn unix_signal_name(signal: i32) -> Option<&'static str> {
+    match signal {
+        1 => Some("SIGHUP"),
+        2 => Some("SIGINT"),
+        3 => Some("SIGQUIT"),
+        4 => Some("SIGILL"),
+        5 => Some("SIGTRAP"),
+        6 => Some("SIGABRT"),
+        8 => Some("SIGFPE"),
+        9 => Some("SIGKILL"),
+        11 => Some("SIGSEGV"),
+        13 => Some("SIGPIPE"),
+        14 => Some("SIGALRM"),
+        15 => Some("SIGTERM"),
+        _ => None,
+    }
+}
+
     mut stdin: impl Write + Send + 'static,
     prompt: Vec<u8>,
     command: Vec<String>,

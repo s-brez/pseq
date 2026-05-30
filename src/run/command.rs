@@ -5,7 +5,9 @@ use crate::render;
 use crate::store;
 
 use super::adapters::prepare_runner_command;
-use super::diagnostics::{should_write_diagnostics, write_turn_diagnostic};
+use super::diagnostics::{
+    should_write_diagnostics, write_runner_failure_diagnostic, write_turn_diagnostic,
+};
 use super::model::ProcessTurnOutput;
 use super::options::{
     feedback_variable, load_base_variables, load_feedback_seed, output_mode, resolve_runner,
@@ -121,10 +123,7 @@ pub fn run_sequence(
                 failed_iteration = (options.iterations > 1).then_some(iteration);
                 failed_turn = Some(turn.index);
                 if should_write_diagnostics(options.capture_output, options.quiet) {
-                    eprintln!(
-                        "pseq: runner exited unsuccessfully at iteration {} turn {} with exit code {}",
-                        iteration, turn.index, process.exit_code
-                    );
+                    write_runner_failure_diagnostic(iteration, turn.index, &process);
                 }
                 break 'iterations;
             }
@@ -185,8 +184,13 @@ fn run_turn_output(
         fragment: turn.fragment.clone(),
         command,
         exit_code: process.exit_code,
+        pid: process.pid,
+        termination: process.termination.as_str().to_owned(),
         stdout: capture_output.then_some(process.stdout.clone()).flatten(),
         stderr: capture_output.then_some(process.stderr.clone()).flatten(),
+        signal: process.signal,
+        signal_name: process.signal_name.map(str::to_owned),
+        core_dumped: process.core_dumped,
         stdout_bytes: capture_output.then_some(process.stdout_bytes).flatten(),
         stderr_bytes: capture_output.then_some(process.stderr_bytes).flatten(),
         stdout_truncated: capture_output.then_some(process.stdout_truncated).flatten(),
