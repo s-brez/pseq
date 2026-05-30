@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt clippy
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --no-deps --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+  npm:
+    name: npm package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Verify release metadata
+        run: npm --prefix npm/pseq run verify:metadata
+
+      - name: Build current-platform binary
+        run: cargo build --locked
+
+      - name: Stage current-platform binary
+        run: npm --prefix npm/pseq run stage:binary
+
+      - name: Check npm wrapper version
+        run: npm --prefix npm/pseq test

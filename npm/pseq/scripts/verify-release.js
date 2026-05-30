@@ -12,20 +12,44 @@ const packageRoot = resolve(options.packageRoot ?? join(here, ".."));
 const repoRoot = resolve(options.repoRoot ?? join(packageRoot, "../.."));
 const packageJsonPath = join(packageRoot, "package.json");
 const cargoTomlPath = join(repoRoot, "Cargo.toml");
+const cargoLockPath = join(repoRoot, "Cargo.lock");
 const errors = [];
 
 const packageJson = readJson(packageJsonPath);
 const cargoToml = readText(cargoTomlPath);
+const cargoLock = readText(cargoLockPath);
 const cargoVersion = cargoPackageField(cargoToml, "version");
 const cargoDescription = cargoPackageField(cargoToml, "description");
+const cargoLockVersion = cargoLockPackageField(cargoLock, "pseq", "version");
+const releaseVersion = options.tag
+  ? versionFromTag(options.tag)
+  : options.version;
 
 check(packageJson.name === "@s-brez/pseq", "package name must be @s-brez/pseq");
 check(packageJson.version === cargoVersion, "npm package version must match Cargo package version");
+check(
+  cargoLockVersion === cargoVersion,
+  "Cargo.lock pseq package version must match Cargo package version",
+);
+if (releaseVersion) {
+  check(
+    releaseVersion === cargoVersion,
+    `release version ${releaseVersion} must match Cargo package version ${cargoVersion}`,
+  );
+}
 check(
   packageJson.description === cargoDescription,
   "npm package description must match Cargo package description",
 );
 check(packageJson.type === "module", "npm package must use ESM");
+check(
+  packageJson.repository?.url === "git+https://github.com/s-brez/pseq.git",
+  "npm package repository URL must match the GitHub repository",
+);
+check(
+  packageJson.repository?.directory === "npm/pseq",
+  "npm package repository directory must be npm/pseq",
+);
 check(packageJson.bin?.pseq === "bin/pseq.js", "npm package must expose the pseq bin");
 check(
   Array.isArray(packageJson.files) && packageJson.files.includes("bin/"),
@@ -154,6 +178,53 @@ function cargoPackageField(content, field) {
   return undefined;
 }
 
+function cargoLockPackageField(content, packageName, field) {
+  let inPackageSection = false;
+  let currentPackage = {};
+
+  for (const line of [...content.split(/\r?\n/), "[[package]]"]) {
+    const trimmed = line.trim();
+    if (trimmed === "[[package]]") {
+      if (inPackageSection && currentPackage.name === packageName) {
+        return currentPackage[field];
+      }
+      inPackageSection = true;
+      currentPackage = {};
+      continue;
+    }
+
+    if (!inPackageSection) {
+      continue;
+    }
+
+    const match = trimmed.match(/^([A-Za-z0-9_-]+)\s*=\s*"([^"]*)"/);
+    if (match) {
+      currentPackage[match[1]] = match[2];
+    }
+  }
+
+  return undefined;
+}
+
+function versionFromTag(rawTag) {
+  const tag = rawTag.replace(/^refs\/tags\//, "");
+  const match = tag.match(/^v(.+)$/);
+  if (!match) {
+    errors.push(`release tag must use v<version> format, got ${rawTag}`);
+    return undefined;
+  }
+  const version = match[1];
+  if (!isReleaseVersion(version)) {
+    errors.push(`release tag version is not supported: ${rawTag}`);
+    return undefined;
+  }
+  return version;
+}
+
+function isReleaseVersion(version) {
+  return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version);
+}
+
 function readJson(path) {
   try {
     return JSON.parse(readText(path));
@@ -200,6 +271,10 @@ function parseArgs(args) {
       parsed.skipBinaries = true;
     } else if (arg === "--skip-pack") {
       parsed.skipPack = true;
+    } else if (arg === "--tag") {
+      parsed.tag = requireValue(args, ++index, arg);
+    } else if (arg === "--version") {
+      parsed.version = requireValue(args, ++index, arg);
     } else if (arg === "--package-root") {
       parsed.packageRoot = requireValue(args, ++index, arg);
     } else if (arg === "--repo-root") {
