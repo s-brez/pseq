@@ -52,6 +52,21 @@ pub fn pseq(args: &[&str]) -> Output {
     pseq_command(args).output().expect("pseq binary should run")
 }
 
+#[cfg(unix)]
+pub fn pseq_in_own_process_group(args: &[&str]) -> Output {
+    let mut command = pseq_command_in_own_process_group(args);
+    command.output().expect("pseq binary should run")
+}
+
+#[cfg(unix)]
+pub fn pseq_command_in_own_process_group(args: &[&str]) -> Command {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = pseq_command(args);
+    command.process_group(0);
+    command
+}
+
 pub fn pseq_with_env(args: &[&str], envs: &[(&str, &str)]) -> Output {
     let mut command = pseq_command(args);
     for (key, value) in envs {

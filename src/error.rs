@@ -157,6 +157,9 @@ pub enum AppError {
         source: io::Error,
     },
 
+    #[error("failed to install runner signal forwarding: {message}")]
+    RunnerSignalForwarding { message: String },
+
     #[error("store is invalid: {path} ({issues} issue(s)); run `pseq doctor --store {path}`")]
     InvalidStore { path: PathBuf, issues: usize },
 
@@ -328,6 +331,7 @@ impl AppError {
             Self::RunnerOutputUnavailable { .. } => "runner_output_unavailable",
             Self::RunnerReadOutput { .. } => "runner_read_output_failed",
             Self::RunnerWait { .. } => "runner_wait_failed",
+            Self::RunnerSignalForwarding { .. } => "runner_signal_forwarding_failed",
             Self::InvalidStore { .. } => "invalid_store",
             Self::InvalidFragmentName { .. } => "invalid_fragment_name",
             Self::FragmentNotFound { .. } => "fragment_not_found",
@@ -372,7 +376,6 @@ impl AppError {
         }
     }
 }
-
 
 #[derive(Debug, Serialize)]
 struct ErrorEnvelope<'a> {

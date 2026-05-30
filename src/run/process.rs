@@ -25,9 +25,11 @@ pub(super) fn run_turn_command(
     let executable = argv.first().ok_or_else(|| AppError::RunnerCommandEmpty {
         context: "runner command".to_owned(),
     })?;
+    install_runner_signal_forwarding()?;
     let mut command = Command::new(executable);
     command.args(&argv[1..]);
     command.stdin(Stdio::piped());
+    start_runner_in_new_process_group(&mut command);
     if output_mode == OutputMode::Inherit {
         command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     } else {
@@ -39,6 +41,7 @@ pub(super) fn run_turn_command(
         source,
     })?;
     let pid = child.id();
+    let _active_process_group = ActiveRunnerProcessGroupGuard::new(pid);
     let stdin = child
         .stdin
         .take()
@@ -115,7 +118,106 @@ pub(super) fn run_turn_command(
     })
 }
 
-fn spawn_stdin_writer(
+#[cfg(unix)]
+static ACTIVE_RUNNER_PROCESS_GROUP_ID: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(0);
+
+#[cfg(unix)]
+static SIGNAL_FORWARDING_INSTALLED: std::sync::OnceLock<Result<(), String>> =
+    std::sync::OnceLock::new();
+
+struct ActiveRunnerProcessGroupGuard {
+    #[cfg(unix)]
+    pgid: i32,
+}
+
+impl ActiveRunnerProcessGroupGuard {
+    fn new(pid: u32) -> Self {
+        #[cfg(unix)]
+        {
+            let pgid = i32::try_from(pid).unwrap_or(i32::MAX);
+            ACTIVE_RUNNER_PROCESS_GROUP_ID.store(pgid, std::sync::atomic::Ordering::SeqCst);
+            Self { pgid }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = pid;
+            Self {}
+        }
+    }
+}
+
+impl Drop for ActiveRunnerProcessGroupGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            let _ = ACTIVE_RUNNER_PROCESS_GROUP_ID.compare_exchange(
+                self.pgid,
+                0,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+fn install_runner_signal_forwarding() -> Result<(), AppError> {
+    let result = SIGNAL_FORWARDING_INSTALLED.get_or_init(|| {
+        let mut signals = signal_hook::iterator::Signals::new([
+            signal_hook::consts::signal::SIGHUP,
+            signal_hook::consts::signal::SIGINT,
+            signal_hook::consts::signal::SIGQUIT,
+            signal_hook::consts::signal::SIGTERM,
+        ])
+        .map_err(|error| error.to_string())?;
+
+        thread::Builder::new()
+            .name("pseq-runner-signal-forwarder".to_owned())
+            .spawn(move || {
+                for signal in signals.forever() {
+                    handle_parent_signal_for_active_runner_group(signal);
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    });
+
+    result
+        .as_ref()
+        .map(|_| ())
+        .map_err(|message| AppError::RunnerSignalForwarding {
+            message: message.clone(),
+        })
+}
+
+#[cfg(not(unix))]
+fn install_runner_signal_forwarding() -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn handle_parent_signal_for_active_runner_group(signal: i32) {
+    let pgid = ACTIVE_RUNNER_PROCESS_GROUP_ID.load(std::sync::atomic::Ordering::SeqCst);
+    if pgid <= 0 {
+        std::process::exit(signal.checked_add(128).unwrap_or(1));
+    }
+    let Ok(signal) = nix::sys::signal::Signal::try_from(signal) else {
+        return;
+    };
+    let _ = nix::sys::signal::kill(nix::unistd::Pid::from_raw(-pgid), signal);
+}
+
+#[cfg(unix)]
+fn start_runner_in_new_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn start_runner_in_new_process_group(_command: &mut Command) {}
+
 #[cfg(unix)]
 fn classify_process_status(status: ExitStatus) -> ClassifiedProcessStatus {
     use std::os::unix::process::ExitStatusExt;
@@ -189,6 +291,7 @@ fn unix_signal_name(signal: i32) -> Option<&'static str> {
     }
 }
 
+fn spawn_stdin_writer(
     mut stdin: impl Write + Send + 'static,
     prompt: Vec<u8>,
     command: Vec<String>,
