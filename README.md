@@ -1,4 +1,8 @@
-`pseq` is a prompt and command sequencer for CLI agent automation.
+[![CI](https://github.com/s-brez/pseq/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/s-brez/pseq/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/%40s-brez%2Fpseq)](https://www.npmjs.com/package/@s-brez/pseq)
+[![license](https://img.shields.io/npm/l/%40s-brez%2Fpseq)](LICENSE)
+
+`pseq` is a simple prompt and command sequencer for light CLI agent automation.
 
 Use `pseq` to:
 * configure and run CLI agent loops

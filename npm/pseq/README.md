@@ -1,4 +1,4 @@
-`pseq` is a prompt and command sequencer for CLI agent automation.
+`pseq` is a simple prompt and command sequencer for light CLI agent automation.
 
 Use `pseq` to:
 * configure and run CLI agent loops
