@@ -23,7 +23,7 @@ fn run_with_ad_hoc_command_feeds_each_fragment_as_one_turn() {
     assert_success(&output);
     assert_eq!(git_head(store.path()), before_head);
     assert!(String::from_utf8_lossy(&output.stdout).contains("created capture:"));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("pseq: running turn 1/2"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("\npseq: running turn 1/2"));
 
     let texts = capture_texts(&sink);
     assert_eq!(texts.len(), 2);
@@ -315,6 +315,138 @@ fi
     let log = fs::read_to_string(log_path).unwrap();
     assert!(log.contains("first input=first prompt"));
     assert!(log.contains("resume session=fake-session-123 input=second prompt"));
+}
+
+#[cfg(unix)]
+#[test]
+fn run_retries_codex_resume_turn_in_same_session() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let store = TestStore::initialized("run-codex-retry-same-session-store");
+    let bin_dir = TestStore::new("run-codex-retry-same-session-bin");
+    let log_path = bin_dir.path().join("codex.log");
+    let retry_count_path = bin_dir.path().join("resume-attempts.txt");
+    fs::create_dir_all(bin_dir.path()).unwrap();
+    let fake_codex = bin_dir.path().join("codex");
+    fs::write(
+        &fake_codex,
+        r#"#!/bin/sh
+out=""
+resume=0
+session=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-last-message|-o)
+      shift
+      out="$1"
+      ;;
+    resume)
+      resume=1
+      ;;
+    --json|--color|--sandbox|-m|-s)
+      if [ "$1" != "--json" ]; then
+        shift
+      fi
+      ;;
+    --*)
+      ;;
+    -)
+      ;;
+    *)
+      if [ "$resume" = "1" ] && [ -z "$session" ]; then
+        session="$1"
+      fi
+      ;;
+  esac
+  shift
+done
+input=$(cat)
+if [ "$resume" = "1" ]; then
+  count=$(cat "$PSEQ_FAKE_CODEX_RETRY_COUNT" 2>/dev/null || printf 0)
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$PSEQ_FAKE_CODEX_RETRY_COUNT"
+  printf 'resume attempt=%s session=%s input=%s\n' "$count" "$session" "$input" >> "$PSEQ_FAKE_CODEX_LOG"
+  if [ "$count" -eq 1 ]; then
+    printf 'transient resume failure\n' >&2
+    exit 23
+  fi
+  printf 'resumed %s after retry\n' "$session" > "$out"
+else
+  printf 'first input=%s\n' "$input" >> "$PSEQ_FAKE_CODEX_LOG"
+  printf '{"type":"thread.started","thread_id":"fake-session-123"}\n'
+  printf 'started fake-session-123\n' > "$out"
+fi
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&fake_codex, fs::Permissions::from_mode(0o755)).unwrap();
+    create_sequence_with_fragments(
+        &store,
+        "Workflow",
+        &[("First", "first prompt\n"), ("Second", "second prompt\n")],
+    );
+
+    let path = format!(
+        "{}:{}",
+        path_str(bin_dir.path()),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let log_path_arg = path_str(&log_path);
+    let retry_count_path_arg = path_str(&retry_count_path);
+    let output = pseq_in_dir_with_env(
+        &[
+            "--store",
+            path_str(store.path()),
+            "--json",
+            "run",
+            "Workflow",
+            "--retry-delay-ms",
+            "0",
+            "--",
+            "codex",
+            "exec",
+            "--sandbox",
+            "workspace-write",
+            "--color",
+            "never",
+            "-",
+        ],
+        store.path(),
+        &[
+            ("PATH", path.as_str()),
+            ("PSEQ_FAKE_CODEX_LOG", log_path_arg),
+            ("PSEQ_FAKE_CODEX_RETRY_COUNT", retry_count_path_arg),
+        ],
+    );
+    assert_success(&output);
+
+    let json = stdout_json(&output);
+    let first_turn = &json["turns"][0];
+    let second_turn = &json["turns"][1];
+    assert!(first_turn.get("attempt_count").is_none());
+    assert_eq!(second_turn["attempt_count"], 2);
+    assert_eq!(
+        second_turn["stdout"],
+        "resumed fake-session-123 after retry\n"
+    );
+    let attempts = second_turn["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 2);
+    for attempt in attempts {
+        let command = attempt["command"].as_array().unwrap();
+        assert!(
+            command.iter().any(|arg| arg == "resume"),
+            "retry attempt should resume the established Codex session, got {command:?}"
+        );
+        assert!(
+            command.iter().any(|arg| arg == "fake-session-123"),
+            "retry attempt should use the original session id, got {command:?}"
+        );
+    }
+
+    let log = fs::read_to_string(log_path).unwrap();
+    assert!(log.contains("first input=first prompt"));
+    assert!(log.contains("resume attempt=1 session=fake-session-123 input=second prompt"));
+    assert!(log.contains("resume attempt=2 session=fake-session-123 input=second prompt"));
 }
 
 #[cfg(unix)]

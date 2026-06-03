@@ -80,7 +80,9 @@ impl RunnerHarnessSession {
             RunnerHarness::Generic => generic::run_turn(&request),
         }?;
 
-        if let Some(next_harness) = outcome.next_harness {
+        if outcome.process.success
+            && let Some(next_harness) = outcome.next_harness
+        {
             self.active = next_harness;
         }
 

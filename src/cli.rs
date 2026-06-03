@@ -137,6 +137,34 @@ pub enum Command {
 
         #[arg(
             long,
+            value_name = "N",
+            conflicts_with = "no_retry",
+            help = "Retry each failed runner turn N times"
+        )]
+        retries: Option<usize>,
+
+        #[arg(
+            long,
+            conflicts_with = "retries",
+            help = "Do not retry failed runner turns"
+        )]
+        no_retry: bool,
+
+        #[arg(
+            long,
+            value_name = "MS",
+            help = "Delay MS milliseconds between runner retries"
+        )]
+        retry_delay_ms: Option<u64>,
+
+        #[arg(
+            long,
+            help = "Inherit runner stdout/stderr without preserving bounded copies"
+        )]
+        no_preserve_output: bool,
+
+        #[arg(
+            long,
             value_enum,
             value_name = "SCOPE",
             help = "Set runner session scope (default: run)"

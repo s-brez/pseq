@@ -9,7 +9,7 @@ use common::{
 };
 
 #[test]
-fn log_exposes_git_backed_history_as_human_and_json() {
+fn log_exposes_git_backed_history_as_non_json_and_json() {
     let store = TestStore::initialized("history-log");
     assert_success(&pseq_with_stdin(
         &[
@@ -38,10 +38,10 @@ fn log_exposes_git_backed_history_as_human_and_json() {
             .any(|entry| entry["summary"] == "Initialize pseq store")
     );
 
-    let human_output = pseq(&["log", "--store", path_str(store.path())]);
-    assert_success(&human_output);
-    assert_stdout_contains(&human_output, "Add fragment History");
-    assert_stdout_contains(&human_output, "Initialize pseq store");
+    let non_json_output = pseq(&["log", "--store", path_str(store.path())]);
+    assert_success(&non_json_output);
+    assert_stdout_contains(&non_json_output, "Add fragment History");
+    assert_stdout_contains(&non_json_output, "Initialize pseq store");
 
     assert_git_clean(store.path());
 }
@@ -106,12 +106,12 @@ fn diff_exposes_tracked_and_untracked_store_differences_without_mutating() {
             .any(|path| { path["status"] == "??" && path["path"] == "captures/manual.json" })
     );
 
-    let human_output = pseq(&["diff", "--store", path_str(store.path())]);
-    assert_success(&human_output);
-    assert_stdout_contains(&human_output, "fragments/tracked.md");
-    assert_stdout_contains(&human_output, "-old body");
-    assert_stdout_contains(&human_output, "+new body");
-    assert_stdout_contains(&human_output, "?? captures/manual.json");
+    let non_json_output = pseq(&["diff", "--store", path_str(store.path())]);
+    assert_success(&non_json_output);
+    assert_stdout_contains(&non_json_output, "fragments/tracked.md");
+    assert_stdout_contains(&non_json_output, "-old body");
+    assert_stdout_contains(&non_json_output, "+new body");
+    assert_stdout_contains(&non_json_output, "?? captures/manual.json");
 
     assert_eq!(git_status(store.path()), expected_status);
 }

@@ -500,7 +500,7 @@ rendered
 }
 
 #[test]
-fn config_show_reports_config_as_human_and_json() {
+fn config_show_reports_config_as_non_json_and_json() {
     let store = TestStore::initialized("config-show");
 
     let json_output = pseq(&[
@@ -516,11 +516,11 @@ fn config_show_reports_config_as_human_and_json() {
     assert_eq!(json["version"], 1);
     assert_eq!(json["runner_count"], 0);
 
-    let human_output = pseq(&["config", "show", "--store", path_str(store.path())]);
-    assert_success(&human_output);
-    assert_stdout_contains(&human_output, "path: config.toml");
-    assert_stdout_contains(&human_output, "version: 1");
-    assert_stdout_contains(&human_output, "runners: 0");
+    let non_json_output = pseq(&["config", "show", "--store", path_str(store.path())]);
+    assert_success(&non_json_output);
+    assert_stdout_contains(&non_json_output, "path: config.toml");
+    assert_stdout_contains(&non_json_output, "version: 1");
+    assert_stdout_contains(&non_json_output, "runners: 0");
     assert_git_clean(store.path());
 }
 
@@ -611,7 +611,7 @@ fn blank_fragment_and_sequence_names_fail_before_mutation() {
 }
 
 #[test]
-fn quiet_suppresses_human_success_output() {
+fn quiet_suppresses_non_json_success_output() {
     let store = TestStore::new("quiet");
 
     let output = pseq(&["init", "--store", path_str(store.path()), "--quiet"]);

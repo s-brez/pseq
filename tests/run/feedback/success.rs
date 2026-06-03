@@ -236,8 +236,8 @@ fn run_feedback_seed_can_read_from_file() {
 }
 
 #[test]
-fn run_feedback_human_mode_tees_output_while_retaining_feedback() {
-    let store = TestStore::initialized("run-feedback-human-tee");
+fn run_feedback_non_json_mode_tees_output_while_retaining_feedback() {
+    let store = TestStore::initialized("run-feedback-non-json-tee");
     create_sequence_with_fragments(
         &store,
         "Workflow",
@@ -268,7 +268,7 @@ fn run_feedback_human_mode_tees_output_while_retaining_feedback() {
         "EMPTY\nUPDATE\nSAW-FEEDBACK\nUPDATE\n"
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("pseq: running iteration 2/2 turn 1/2")
+        String::from_utf8_lossy(&output.stderr).contains("\npseq: running iteration 2/2 turn 1/2")
     );
     assert_git_clean(store.path());
 }

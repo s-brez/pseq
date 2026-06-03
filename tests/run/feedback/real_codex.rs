@@ -1,6 +1,40 @@
 use super::super::*;
 
 #[test]
+#[ignore = "requires the real Codex CLI binary"]
+fn run_retries_real_codex_cli_failure_and_preserves_stderr() {
+    let store = TestStore::initialized("run-codex-retry-failure");
+    create_sequence_with_fragments(&store, "Workflow", &[("Only", "body\n")]);
+
+    let output = pseq(&[
+        "--store",
+        path_str(store.path()),
+        "--json",
+        "run",
+        "Workflow",
+        "--retry-delay-ms",
+        "0",
+        "--",
+        "codex",
+        "exec",
+        "--pseq-invalid-option",
+        "-",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+
+    let json = stdout_json(&output);
+    let turn = &json["turns"][0];
+    assert_eq!(turn["attempt_count"], 3);
+    assert_eq!(turn["attempts"].as_array().unwrap().len(), 3);
+    assert!(
+        turn["attempts"][0]["stderr"]
+            .as_str()
+            .is_some_and(|stderr| !stderr.trim().is_empty()),
+        "real Codex parse failure should preserve stderr"
+    );
+}
+
+#[test]
 #[ignore = "requires Codex CLI auth and spends model tokens"]
 fn run_feedback_loop_with_real_codex_cli() {
     let store = TestStore::initialized("run-feedback-codex");

@@ -123,6 +123,10 @@ pub fn run(cli: Cli) -> Result<CommandResult, AppError> {
             variables_file,
             max_captured_output,
             iterations,
+            retries,
+            no_retry,
+            retry_delay_ms,
+            no_preserve_output,
             session_scope,
             feedback_from,
             feedback_var,
@@ -141,6 +145,14 @@ pub fn run(cli: Cli) -> Result<CommandResult, AppError> {
                     max_captured_output: max_captured_output
                         .unwrap_or(run::DEFAULT_MAX_CAPTURED_OUTPUT),
                     iterations: iterations.unwrap_or(1),
+                    retries,
+                    no_retry,
+                    retry_delay_ms,
+                    preserve_output: if no_preserve_output {
+                        Some(false)
+                    } else {
+                        None
+                    },
                     session_scope: session_scope
                         .map(session_scope_arg)
                         .unwrap_or(run::SessionScope::Run),
