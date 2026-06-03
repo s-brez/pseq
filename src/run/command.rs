@@ -1,17 +1,19 @@
 use std::path::Path;
+use std::time::Duration;
 
 use crate::error::AppError;
 use crate::render;
 use crate::store;
 
 use super::diagnostics::{
-    should_write_diagnostics, write_runner_failure_diagnostic, write_turn_diagnostic,
+    should_write_diagnostics, write_runner_failure_diagnostic, write_runner_retry_diagnostic,
+    write_turn_diagnostic,
 };
 use super::harnesses::{RunnerHarnessSession, prepare_runner_command};
-use super::model::ProcessTurnOutput;
+use super::model::{OutputMode, ProcessTermination, ProcessTurnOutput};
 use super::options::{
-    feedback_variable, load_base_variables, load_feedback_seed, output_mode, resolve_runner,
-    validate_options,
+    RunSettings, feedback_variable, load_base_variables, load_feedback_seed, output_mode,
+    resolve_run_settings, resolve_runner, validate_options,
 };
 use super::types::*;
 
@@ -24,6 +26,7 @@ pub fn run_sequence(
     validate_options(&options)?;
 
     let feedback_variable = feedback_variable(&options)?;
+    let run_settings = resolve_run_settings(store_path, &options)?;
     let runner = resolve_runner(store_path, &options)?;
     let base_variables = load_base_variables(&options, feedback_variable.as_deref())?;
     let mut previous_feedback = load_feedback_seed(&options)?;
@@ -48,7 +51,10 @@ pub fn run_sequence(
     };
     let turns_per_iteration = first_sequence.turns.len();
     let total_turns = turns_per_iteration * options.iterations;
-    let output_mode = output_mode(&options);
+    let output_mode = output_mode(&options, run_settings);
+    let include_output =
+        options.capture_output || run_settings.preserve_output || options.feedback_from.is_some();
+    let write_diagnostics = should_write_diagnostics(options.capture_output, options.quiet);
     let mut run_session = RunnerHarnessSession::new();
 
     let mut turns = Vec::new();
@@ -78,7 +84,7 @@ pub fn run_sequence(
                 SessionScope::Iteration => turn.index < sequence.turns.len(),
             };
             let command = prepare_runner_command(runner.command_for_turn(scoped_turn_index))?;
-            if should_write_diagnostics(options.capture_output, options.quiet) {
+            if write_diagnostics {
                 write_turn_diagnostic(
                     iteration,
                     options.iterations,
@@ -93,13 +99,26 @@ pub fn run_sequence(
                 SessionScope::Run => &mut run_session,
                 SessionScope::Iteration => &mut iteration_session,
             };
-            let (command, process) = runner_session.run_turn(
-                &command,
-                &turn.text,
-                output_mode,
-                options.max_captured_output,
-                has_later_turn,
+            let attempts = run_turn_attempts(
+                runner_session,
+                RunAttemptRequest {
+                    command: &command,
+                    prompt: &turn.text,
+                    output_mode,
+                    max_captured_output: options.max_captured_output,
+                    has_later_turn,
+                    settings: run_settings,
+                    diagnostics: RetryDiagnosticContext {
+                        enabled: write_diagnostics,
+                        iteration,
+                        turn: turn.index,
+                    },
+                },
             )?;
+            let final_attempt = attempts
+                .last()
+                .expect("run_turn_attempts always returns one attempt");
+            let process = &final_attempt.process;
             let is_feedback_turn =
                 options.feedback_from.is_some() && turn.index == sequence.turns.len();
             let feedback_stdout = if is_feedback_turn {
@@ -113,16 +132,17 @@ pub fn run_sequence(
                 options.iterations,
                 iteration,
                 turn,
-                command,
-                &process,
-                options.capture_output,
+                &final_attempt.command,
+                process,
+                include_output,
+                &attempts,
             ));
 
             if !process.success {
                 failed_iteration = (options.iterations > 1).then_some(iteration);
                 failed_turn = Some(turn.index);
-                if should_write_diagnostics(options.capture_output, options.quiet) {
-                    write_runner_failure_diagnostic(iteration, turn.index, &process);
+                if write_diagnostics {
+                    write_runner_failure_diagnostic(iteration, turn.index, process, attempts.len());
                 }
                 break 'iterations;
             }
@@ -169,30 +189,151 @@ pub fn run_sequence(
     ))
 }
 
+#[derive(Debug)]
+struct RunAttemptRecord {
+    attempt: usize,
+    command: Vec<String>,
+    process: ProcessTurnOutput,
+    retryable: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RetryDiagnosticContext {
+    enabled: bool,
+    iteration: usize,
+    turn: usize,
+}
+
+struct RunAttemptRequest<'a> {
+    command: &'a [String],
+    prompt: &'a str,
+    output_mode: OutputMode,
+    max_captured_output: usize,
+    has_later_turn: bool,
+    settings: RunSettings,
+    diagnostics: RetryDiagnosticContext,
+}
+
+fn run_turn_attempts(
+    runner_session: &mut RunnerHarnessSession,
+    request: RunAttemptRequest<'_>,
+) -> Result<Vec<RunAttemptRecord>, AppError> {
+    let settings = request.settings;
+    let max_attempts = settings.retries.saturating_add(1);
+    let mut attempts = Vec::new();
+
+    for attempt in 1..=max_attempts {
+        let (attempt_command, process) = runner_session.run_turn(
+            request.command,
+            request.prompt,
+            request.output_mode,
+            request.max_captured_output,
+            request.has_later_turn,
+        )?;
+        let retryable = is_retryable_runner_failure(&process);
+        let success = process.success;
+        attempts.push(RunAttemptRecord {
+            attempt,
+            command: attempt_command,
+            process,
+            retryable,
+        });
+
+        if success || attempt == max_attempts || !retryable {
+            break;
+        }
+
+        if request.diagnostics.enabled {
+            write_runner_retry_diagnostic(
+                request.diagnostics.iteration,
+                request.diagnostics.turn,
+                attempt,
+                max_attempts,
+                settings.retry_delay_ms,
+                &attempts.last().expect("attempt was just pushed").process,
+            );
+        }
+        if settings.retry_delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(settings.retry_delay_ms));
+        }
+    }
+
+    Ok(attempts)
+}
+
+fn is_retryable_runner_failure(process: &ProcessTurnOutput) -> bool {
+    !process.success
+        && matches!(
+            process.termination,
+            ProcessTermination::Exit | ProcessTermination::Unknown
+        )
+}
+
 fn run_turn_output(
     iterations: usize,
     iteration: usize,
     turn: &render::RenderedTurn,
-    command: Vec<String>,
+    command: &[String],
     process: &ProcessTurnOutput,
-    capture_output: bool,
+    include_output: bool,
+    attempts: &[RunAttemptRecord],
 ) -> RunTurnOutput {
     RunTurnOutput {
         iteration: (iterations > 1).then_some(iteration),
         index: turn.index,
         fragment: turn.fragment.clone(),
-        command,
+        command: command.to_vec(),
         pid: process.pid,
         termination: process.termination.as_str().to_owned(),
         exit_code: process.exit_code,
         signal: process.signal,
         signal_name: process.signal_name.map(str::to_owned),
         core_dumped: process.core_dumped,
-        stdout: capture_output.then_some(process.stdout.clone()).flatten(),
-        stderr: capture_output.then_some(process.stderr.clone()).flatten(),
-        stdout_bytes: capture_output.then_some(process.stdout_bytes).flatten(),
-        stderr_bytes: capture_output.then_some(process.stderr_bytes).flatten(),
-        stdout_truncated: capture_output.then_some(process.stdout_truncated).flatten(),
-        stderr_truncated: capture_output.then_some(process.stderr_truncated).flatten(),
+        attempt_count: (attempts.len() > 1).then_some(attempts.len()),
+        attempts: (attempts.len() > 1).then(|| run_attempt_outputs(attempts, include_output)),
+        stdout: include_output.then_some(process.stdout.clone()).flatten(),
+        stderr: include_output.then_some(process.stderr.clone()).flatten(),
+        stdout_bytes: include_output.then_some(process.stdout_bytes).flatten(),
+        stderr_bytes: include_output.then_some(process.stderr_bytes).flatten(),
+        stdout_truncated: include_output.then_some(process.stdout_truncated).flatten(),
+        stderr_truncated: include_output.then_some(process.stderr_truncated).flatten(),
     }
+}
+
+fn run_attempt_outputs(
+    attempts: &[RunAttemptRecord],
+    include_output: bool,
+) -> Vec<RunAttemptOutput> {
+    attempts
+        .iter()
+        .map(|attempt| RunAttemptOutput {
+            attempt: attempt.attempt,
+            command: attempt.command.clone(),
+            pid: attempt.process.pid,
+            termination: attempt.process.termination.as_str().to_owned(),
+            exit_code: attempt.process.exit_code,
+            signal: attempt.process.signal,
+            signal_name: attempt.process.signal_name.map(str::to_owned),
+            core_dumped: attempt.process.core_dumped,
+            retryable: attempt.retryable,
+            stdout: include_output
+                .then_some(attempt.process.stdout.clone())
+                .flatten(),
+            stderr: include_output
+                .then_some(attempt.process.stderr.clone())
+                .flatten(),
+            stdout_bytes: include_output
+                .then_some(attempt.process.stdout_bytes)
+                .flatten(),
+            stderr_bytes: include_output
+                .then_some(attempt.process.stderr_bytes)
+                .flatten(),
+            stdout_truncated: include_output
+                .then_some(attempt.process.stdout_truncated)
+                .flatten(),
+            stderr_truncated: include_output
+                .then_some(attempt.process.stderr_truncated)
+                .flatten(),
+        })
+        .collect()
 }

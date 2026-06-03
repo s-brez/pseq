@@ -24,6 +24,10 @@ pub struct RunOptions<'a> {
     pub capture_output: bool,
     pub max_captured_output: usize,
     pub iterations: usize,
+    pub retries: Option<usize>,
+    pub no_retry: bool,
+    pub retry_delay_ms: Option<u64>,
+    pub preserve_output: Option<bool>,
     pub session_scope: SessionScope,
     pub feedback_from: Option<FeedbackFrom>,
     pub feedback_var: Option<&'a str>,
@@ -77,6 +81,38 @@ pub struct RunTurnOutput {
     pub signal_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub core_dumped: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<Vec<RunAttemptOutput>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout_truncated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr_truncated: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunAttemptOutput {
+    pub attempt: usize,
+    pub command: Vec<String>,
+    pub pid: u32,
+    pub termination: String,
+    pub exit_code: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub core_dumped: Option<bool>,
+    pub retryable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stdout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

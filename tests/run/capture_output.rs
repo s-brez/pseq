@@ -71,3 +71,25 @@ fn run_json_bounds_captured_runner_output_and_reports_truncation() {
     assert_eq!(turn["stderr_bytes"], 0);
     assert_eq!(turn["stderr_truncated"], false);
 }
+
+#[test]
+fn run_no_preserve_output_inherits_runner_streams_in_non_json_mode() {
+    let store = TestStore::initialized("run-no-preserve-output");
+    create_sequence_with_fragments(&store, "Workflow", &[("Only", "body\n")]);
+
+    let output = pseq(&[
+        "--store",
+        path_str(store.path()),
+        "--quiet",
+        "run",
+        "Workflow",
+        "--no-preserve-output",
+        "--",
+        "sh",
+        "-c",
+        "printf 'runner stdout\\n'; printf 'runner stderr\\n' >&2",
+    ]);
+    assert_success(&output);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "runner stdout\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "runner stderr\n");
+}

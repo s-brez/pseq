@@ -8,6 +8,9 @@ use crate::error::AppError;
 use crate::store;
 
 pub(crate) const CONFIG_FILE: &str = "config.toml";
+pub(crate) const DEFAULT_RUN_RETRIES: usize = 2;
+pub(crate) const DEFAULT_RUN_RETRY_DELAY_MS: u64 = 3000;
+pub(crate) const DEFAULT_RUN_PRESERVE_OUTPUT: bool = true;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -15,8 +18,37 @@ pub(crate) struct ConfigFile {
     pub version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_runner: Option<String>,
+    #[serde(default, skip_serializing_if = "RunConfig::is_default")]
+    pub run: RunConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub runners: BTreeMap<String, RunnerConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RunConfig {
+    #[serde(default = "default_run_retries")]
+    pub retries: usize,
+    #[serde(default = "default_run_retry_delay_ms")]
+    pub retry_delay_ms: u64,
+    #[serde(default = "default_run_preserve_output")]
+    pub preserve_output: bool,
+}
+
+impl Default for RunConfig {
+    fn default() -> Self {
+        Self {
+            retries: DEFAULT_RUN_RETRIES,
+            retry_delay_ms: DEFAULT_RUN_RETRY_DELAY_MS,
+            preserve_output: DEFAULT_RUN_PRESERVE_OUTPUT,
+        }
+    }
+}
+
+impl RunConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +157,18 @@ fn validate_config(config: &ConfigFile) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+fn default_run_retries() -> usize {
+    DEFAULT_RUN_RETRIES
+}
+
+fn default_run_retry_delay_ms() -> u64 {
+    DEFAULT_RUN_RETRY_DELAY_MS
+}
+
+fn default_run_preserve_output() -> bool {
+    DEFAULT_RUN_PRESERVE_OUTPUT
 }
 
 pub(crate) fn validate_argv(argv: &[String], label: &str) -> Result<(), AppError> {

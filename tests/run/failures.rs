@@ -31,7 +31,7 @@ fn run_rejects_mixed_named_runner_and_ad_hoc_command_before_execution() {
 }
 
 #[test]
-fn run_stops_after_first_unsuccessful_runner_exit() {
+fn run_stops_after_unsuccessful_runner_turn_exhausts_retries() {
     let store = TestStore::initialized("run-failure");
     let missing = TestStore::new("run-missing-store");
     create_sequence_with_fragments(&store, "Workflow", &[("First", "A\n"), ("Second", "B\n")]);
@@ -63,6 +63,186 @@ fn run_stops_after_first_unsuccessful_runner_exit() {
 }
 
 #[test]
+fn run_retries_failed_runner_turn_by_default() {
+    let store = TestStore::initialized("run-default-retry");
+    let scratch = TestStore::new("run-default-retry-scratch");
+    fs::create_dir_all(scratch.path()).unwrap();
+    let counter = scratch.path().join("attempts");
+    create_sequence_with_fragments(&store, "Workflow", &[("Only", "body\n")]);
+
+    let output = pseq(&[
+        "--store",
+        path_str(store.path()),
+        "--json",
+        "run",
+        "Workflow",
+        "--retry-delay-ms",
+        "0",
+        "--",
+        "sh",
+        "-c",
+        r#"counter=$1
+count=$(cat "$counter" 2>/dev/null || printf 0)
+count=$((count + 1))
+printf '%s\n' "$count" > "$counter"
+printf 'stdout attempt %s\n' "$count"
+printf 'stderr attempt %s\n' "$count" >&2
+if [ "$count" -lt 3 ]; then
+  exit 17
+fi
+"#,
+        "sh",
+        path_str(&counter),
+    ]);
+    assert_success(&output);
+    assert!(output.stderr.is_empty());
+    assert_eq!(fs::read_to_string(&counter).unwrap().trim(), "3");
+
+    let json = stdout_json(&output);
+    let turn = &json["turns"][0];
+    assert_eq!(json["success"], true);
+    assert_eq!(json["completed_turns"], 1);
+    assert_eq!(turn["exit_code"], 0);
+    assert_eq!(turn["attempt_count"], 3);
+    assert_eq!(turn["attempts"].as_array().unwrap().len(), 3);
+    assert_eq!(turn["attempts"][0]["exit_code"], 17);
+    assert_eq!(turn["attempts"][0]["retryable"], true);
+    assert_eq!(turn["attempts"][0]["stdout"], "stdout attempt 1\n");
+    assert_eq!(turn["attempts"][0]["stderr"], "stderr attempt 1\n");
+    assert_eq!(turn["attempts"][2]["exit_code"], 0);
+    assert_eq!(turn["attempts"][2]["retryable"], false);
+    assert_eq!(turn["stdout"], "stdout attempt 3\n");
+    assert_eq!(turn["stderr"], "stderr attempt 3\n");
+}
+
+#[test]
+fn run_no_retry_preserves_one_shot_failure_behavior() {
+    let store = TestStore::initialized("run-no-retry");
+    let scratch = TestStore::new("run-no-retry-scratch");
+    fs::create_dir_all(scratch.path()).unwrap();
+    let counter = scratch.path().join("attempts");
+    create_sequence_with_fragments(&store, "Workflow", &[("Only", "body\n")]);
+
+    let output = pseq(&[
+        "--store",
+        path_str(store.path()),
+        "--json",
+        "run",
+        "Workflow",
+        "--no-retry",
+        "--",
+        "sh",
+        "-c",
+        r#"counter=$1
+count=$(cat "$counter" 2>/dev/null || printf 0)
+count=$((count + 1))
+printf '%s\n' "$count" > "$counter"
+printf 'failed once\n'
+exit 9
+"#,
+        "sh",
+        path_str(&counter),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    assert_eq!(fs::read_to_string(&counter).unwrap().trim(), "1");
+
+    let json = stdout_json(&output);
+    let turn = &json["turns"][0];
+    assert_eq!(json["success"], false);
+    assert_eq!(json["completed_turns"], 0);
+    assert_eq!(turn["exit_code"], 9);
+    assert!(turn.get("attempt_count").is_none());
+    assert!(turn.get("attempts").is_none());
+    assert_eq!(turn["stdout"], "failed once\n");
+}
+
+#[test]
+fn run_uses_configured_retry_defaults() {
+    let store = TestStore::initialized("run-config-retry");
+    let scratch = TestStore::new("run-config-retry-scratch");
+    fs::create_dir_all(scratch.path()).unwrap();
+    let counter = scratch.path().join("attempts");
+    create_sequence_with_fragments(&store, "Workflow", &[("Only", "body\n")]);
+    fs::write(
+        store.path().join("config.toml"),
+        "version = 1\n\n[run]\nretries = 1\nretry_delay_ms = 0\n",
+    )
+    .unwrap();
+
+    let output = pseq(&[
+        "--store",
+        path_str(store.path()),
+        "--json",
+        "run",
+        "Workflow",
+        "--",
+        "sh",
+        "-c",
+        r#"counter=$1
+count=$(cat "$counter" 2>/dev/null || printf 0)
+count=$((count + 1))
+printf '%s\n' "$count" > "$counter"
+exit 12
+"#,
+        "sh",
+        path_str(&counter),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(fs::read_to_string(&counter).unwrap().trim(), "2");
+
+    let json = stdout_json(&output);
+    let turn = &json["turns"][0];
+    assert_eq!(turn["attempt_count"], 2);
+    assert_eq!(turn["attempts"].as_array().unwrap().len(), 2);
+    assert_eq!(turn["attempts"][0]["retryable"], true);
+    assert_eq!(turn["attempts"][1]["retryable"], true);
+}
+
+#[test]
+fn run_retry_diagnostics_are_factual_and_concise() {
+    let store = TestStore::initialized("run-retry-diagnostic");
+    let scratch = TestStore::new("run-retry-diagnostic-scratch");
+    fs::create_dir_all(scratch.path()).unwrap();
+    let counter = scratch.path().join("attempts");
+    create_sequence_with_fragments(&store, "Workflow", &[("Only", "body\n")]);
+
+    let output = pseq(&[
+        "--store",
+        path_str(store.path()),
+        "run",
+        "Workflow",
+        "--retries",
+        "1",
+        "--retry-delay-ms",
+        "0",
+        "--",
+        "sh",
+        "-c",
+        r#"counter=$1
+count=$(cat "$counter" 2>/dev/null || printf 0)
+count=$((count + 1))
+printf '%s\n' "$count" > "$counter"
+if [ "$count" -eq 1 ]; then
+  exit 6
+fi
+"#,
+        "sh",
+        path_str(&counter),
+    ]);
+    assert_success(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("\npseq: runner attempt 1/2 failed at iteration 1 turn 1 with exit code 6"),
+        "stderr should include factual retry status, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("retrying in 0ms"),
+        "stderr should include retry delay, got {stderr:?}"
+    );
+}
+
+#[test]
 fn run_failure_uses_pseq_failure_exit_code_and_reports_runner_exit_code() {
     let store = TestStore::initialized("run-failure-exit-code");
     create_sequence_with_fragments(&store, "Workflow", &[("Only", "body\n")]);
@@ -87,6 +267,46 @@ fn run_failure_uses_pseq_failure_exit_code_and_reports_runner_exit_code() {
     );
     assert_eq!(json["failed_turn"], 1);
     assert_eq!(json["turns"][0]["exit_code"], 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_does_not_retry_signal_terminated_runner_process() {
+    let store = TestStore::initialized("run-signal-no-retry");
+    let scratch = TestStore::new("run-signal-no-retry-scratch");
+    fs::create_dir_all(scratch.path()).unwrap();
+    let counter = scratch.path().join("attempts");
+    create_sequence_with_fragments(&store, "Workflow", &[("Only", "body\n")]);
+
+    let output = pseq(&[
+        "--store",
+        path_str(store.path()),
+        "--json",
+        "run",
+        "Workflow",
+        "--retry-delay-ms",
+        "0",
+        "--",
+        "sh",
+        "-c",
+        r#"counter=$1
+count=$(cat "$counter" 2>/dev/null || printf 0)
+count=$((count + 1))
+printf '%s\n' "$count" > "$counter"
+kill -TERM $$
+"#,
+        "sh",
+        path_str(&counter),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(fs::read_to_string(&counter).unwrap().trim(), "1");
+
+    let json = stdout_json(&output);
+    let turn = &json["turns"][0];
+    assert_eq!(turn["termination"], "signal");
+    assert_eq!(turn["signal"], 15);
+    assert!(turn.get("attempt_count").is_none());
+    assert!(turn.get("attempts").is_none());
 }
 
 #[cfg(unix)]

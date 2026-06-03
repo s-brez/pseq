@@ -51,8 +51,8 @@ fn render_out_annotate_and_save_write_requested_records() {
 }
 
 #[test]
-fn render_out_suppresses_human_stdout() {
-    let store = TestStore::initialized("render-out-human");
+fn render_out_suppresses_non_json_stdout() {
+    let store = TestStore::initialized("render-out-non-json");
     create_single_fragment_sequence(&store, "Combo", "Only", "body\n");
 
     let out_path = store.path().with_extension("out.md");

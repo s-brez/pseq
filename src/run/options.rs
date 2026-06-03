@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::path::Path;
 
+use crate::config;
 use crate::error::AppError;
 use crate::render;
 use crate::runner::{self, ResolvedRunner};
@@ -31,8 +32,36 @@ pub(super) fn validate_options(options: &RunOptions<'_>) -> Result<(), AppError>
             message: "feedback seed can only be set with --feedback-from".to_owned(),
         });
     }
+    if options.no_retry && options.retries.is_some() {
+        return Err(AppError::InvalidRunInvocation {
+            message: "--no-retry cannot be used with --retries".to_owned(),
+        });
+    }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RunSettings {
+    pub(super) retries: usize,
+    pub(super) retry_delay_ms: u64,
+    pub(super) preserve_output: bool,
+}
+
+pub(super) fn resolve_run_settings(
+    store_path: &Path,
+    options: &RunOptions<'_>,
+) -> Result<RunSettings, AppError> {
+    let config = config::read_config(store_path)?.run;
+    Ok(RunSettings {
+        retries: if options.no_retry {
+            0
+        } else {
+            options.retries.unwrap_or(config.retries)
+        },
+        retry_delay_ms: options.retry_delay_ms.unwrap_or(config.retry_delay_ms),
+        preserve_output: options.preserve_output.unwrap_or(config.preserve_output),
+    })
 }
 
 pub(super) fn feedback_variable(options: &RunOptions<'_>) -> Result<Option<String>, AppError> {
@@ -101,10 +130,10 @@ pub(super) fn load_feedback_seed(options: &RunOptions<'_>) -> Result<String, App
     })
 }
 
-pub(super) fn output_mode(options: &RunOptions<'_>) -> OutputMode {
+pub(super) fn output_mode(options: &RunOptions<'_>, settings: RunSettings) -> OutputMode {
     if options.capture_output {
         OutputMode::Capture
-    } else if options.feedback_from.is_some() {
+    } else if options.feedback_from.is_some() || settings.preserve_output {
         OutputMode::Tee
     } else {
         OutputMode::Inherit

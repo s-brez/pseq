@@ -168,14 +168,20 @@ fn finalize_codex_turn_output(
     };
     let _ = fs::remove_file(output_path);
 
+    let stdout_text = if process.success || !final_message.is_empty() {
+        final_message
+    } else {
+        process.stdout.clone().unwrap_or_default()
+    };
+
     if output_mode != OutputMode::Capture {
-        write_to_stdout(&final_message)?;
+        write_to_stdout(&stdout_text)?;
         if let Some(stderr) = &process.stderr {
             write_to_stderr(stderr)?;
         }
     }
 
-    let stdout_capture = capture_for_mode(&final_message, output_mode, max_captured_output);
+    let stdout_capture = capture_for_mode(&stdout_text, output_mode, max_captured_output);
     let stderr_capture = process
         .stderr
         .as_deref()
