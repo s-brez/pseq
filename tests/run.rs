@@ -12,10 +12,14 @@ use common::{pseq_command_in_own_process_group, pseq_in_own_process_group};
 
 #[path = "run/capture_output.rs"]
 mod capture_output;
+#[path = "run/codex_harness.rs"]
+mod codex_harness;
 #[path = "run/failures.rs"]
 mod failures;
 #[path = "run/feedback.rs"]
 mod feedback;
+#[path = "run/reasoning_effort.rs"]
+mod reasoning_effort;
 #[path = "run/runner_modes.rs"]
 mod runner_modes;
 

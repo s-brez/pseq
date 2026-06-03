@@ -139,6 +139,8 @@ fn parse_render_fragment(
         id: metadata.id,
         name: metadata.name,
         path,
+        pseq_metadata: metadata.pseq,
+        dotted_reasoning_effort: metadata.dotted_reasoning_effort,
         body: body.to_owned(),
     })
 }

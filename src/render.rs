@@ -17,11 +17,12 @@ const SEQUENCE_ID_PREFIX: &str = "seq_";
 const INCLUDE_PREFIX: &str = "pseq.fragment.";
 
 pub use commands::{render, render_turns};
-pub(crate) use engine::render_sequence_turns;
+pub(crate) use engine::render_sequence_runtime_turns;
 pub(crate) use load::load_current_sequence;
 pub use types::{
     RenderOptions, RenderOutput, RenderTurnsOptions, RenderedSequenceTurns, RenderedTurn,
     RenderedTurnFragment, SavedRenderSummary,
 };
+pub(crate) use types::{RenderedRuntimeTurn, RenderedSequenceRuntimeTurns};
 pub use validation::validate_saved_renders;
 pub(crate) use variables::{load_variables, validate_variable_name};

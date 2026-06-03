@@ -1,6 +1,6 @@
 {
   "name": "@s-brez/pseq",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Simple prompt and command sequencer for CLI agent automation.",
   "main": "bin/pseq.js",
   "scripts": {

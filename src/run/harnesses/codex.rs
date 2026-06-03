@@ -7,12 +7,17 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::turn_settings::{
+    REASONING_EFFORT_KEY, ReasoningEffort, TurnRuntimeSettings, fragment_setting_label,
+};
 
 use super::super::model::{OutputMode, ProcessTurnOutput};
 use super::super::process::run_turn_command;
 use super::{HarnessTurnOutcome, HarnessTurnRequest, RunnerHarness};
 
 const INTERNAL_CODEX_JSON_CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
+const CODEX_REASONING_EFFORT_CONFIG_KEY: &str = "model_reasoning_effort";
+const CODEX_REASONING_EFFORT_VALUES: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 
 #[derive(Debug)]
 pub(super) struct CodexSession {
@@ -51,6 +56,16 @@ pub(super) fn prepare_command(argv: &[String], current_dir: &Path) -> Vec<String
     command
 }
 
+pub(super) fn validate_turn_settings(
+    settings: TurnRuntimeSettings,
+    fragment: &crate::render::RenderedTurnFragment,
+) -> Result<(), AppError> {
+    if let Some(reasoning_effort) = settings.reasoning_effort {
+        codex_reasoning_effort_config(reasoning_effort, fragment)?;
+    }
+    Ok(())
+}
+
 pub(super) fn run_turn(
     session: Option<&CodexSession>,
     request: &HarnessTurnRequest<'_>,
@@ -61,10 +76,17 @@ pub(super) fn run_turn(
             &session.executable,
             &session.resume_prefix_args,
             &session.id,
+            request.settings,
+            request.fragment,
             &output_path,
-        )
+        )?
     } else {
-        codex_first_turn_command(request.argv, &output_path)
+        codex_first_turn_command(
+            request.argv,
+            request.settings,
+            request.fragment,
+            &output_path,
+        )?
     };
 
     let internal_capture_limit = INTERNAL_CODEX_JSON_CAPTURE_LIMIT.max(request.max_captured_output);
@@ -113,26 +135,36 @@ struct CodexFinalizedTurnOutput {
     internal_stdout: Option<String>,
 }
 
-fn codex_first_turn_command(argv: &[String], output_path: &Path) -> Vec<String> {
+fn codex_first_turn_command(
+    argv: &[String],
+    settings: TurnRuntimeSettings,
+    fragment: &crate::render::RenderedTurnFragment,
+    output_path: &Path,
+) -> Result<Vec<String>, AppError> {
     let mut command = argv.to_vec();
+    insert_codex_turn_settings_args(&mut command, 2, settings, fragment)?;
     insert_codex_json_output_args(&mut command, 2, output_path);
-    command
+    Ok(command)
 }
 
 fn codex_resume_command(
     executable: &str,
     resume_prefix_args: &[String],
     session_id: &str,
+    settings: TurnRuntimeSettings,
+    fragment: &crate::render::RenderedTurnFragment,
     output_path: &Path,
-) -> Vec<String> {
+) -> Result<Vec<String>, AppError> {
     let mut command = vec![executable.to_owned(), "exec".to_owned()];
     command.extend_from_slice(resume_prefix_args);
+    let insert_at = command.len();
+    insert_codex_turn_settings_args(&mut command, insert_at, settings, fragment)?;
     command.push("resume".to_owned());
     let insert_at = command.len();
     insert_codex_json_output_args(&mut command, insert_at, output_path);
     command.push(session_id.to_owned());
     command.push("-".to_owned());
-    command
+    Ok(command)
 }
 
 fn insert_codex_json_output_args(command: &mut Vec<String>, insert_at: usize, output_path: &Path) {
@@ -144,6 +176,43 @@ fn insert_codex_json_output_args(command: &mut Vec<String>, insert_at: usize, ou
     args.push("--output-last-message".to_owned());
     args.push(output_path.to_string_lossy().into_owned());
     command.splice(insert_at..insert_at, args);
+}
+
+fn insert_codex_turn_settings_args(
+    command: &mut Vec<String>,
+    insert_at: usize,
+    settings: TurnRuntimeSettings,
+    fragment: &crate::render::RenderedTurnFragment,
+) -> Result<(), AppError> {
+    let Some(reasoning_effort) = settings.reasoning_effort else {
+        return Ok(());
+    };
+
+    let config = codex_reasoning_effort_config(reasoning_effort, fragment)?;
+    remove_codex_reasoning_effort_args(command);
+    let insert_at = insert_at.min(command.len());
+    command.splice(insert_at..insert_at, ["-c".to_owned(), config]);
+    Ok(())
+}
+
+fn codex_reasoning_effort_config(
+    effort: ReasoningEffort,
+    fragment: &crate::render::RenderedTurnFragment,
+) -> Result<String, AppError> {
+    if effort == ReasoningEffort::Max {
+        return Err(AppError::InvalidRunInvocation {
+            message: format!(
+                "{} declares {REASONING_EFFORT_KEY}=max, but Codex supports only {}",
+                fragment_setting_label(fragment),
+                CODEX_REASONING_EFFORT_VALUES.join(", ")
+            ),
+        });
+    }
+
+    Ok(format!(
+        "{CODEX_REASONING_EFFORT_CONFIG_KEY}=\"{}\"",
+        effort.as_str()
+    ))
 }
 
 fn finalize_codex_turn_output(
@@ -516,6 +585,43 @@ fn remove_codex_output_last_message_args(command: &mut Vec<String>) {
     }
 }
 
+fn remove_codex_reasoning_effort_args(command: &mut Vec<String>) {
+    let mut index = 0;
+    while index < command.len() {
+        let arg = &command[index];
+        if arg == "-c" || arg == "--config" {
+            if let Some(value) = command.get(index + 1)
+                && is_codex_reasoning_effort_config(value)
+            {
+                let end = (index + 2).min(command.len());
+                command.drain(index..end);
+                continue;
+            }
+            index += if index + 1 < command.len() { 2 } else { 1 };
+            continue;
+        }
+        if let Some(value) = arg
+            .strip_prefix("--config=")
+            .or_else(|| arg.strip_prefix("-c="))
+            && is_codex_reasoning_effort_config(value)
+        {
+            command.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+}
+
+fn is_codex_reasoning_effort_config(value: &str) -> bool {
+    let Some(rest) = value
+        .trim_start()
+        .strip_prefix(CODEX_REASONING_EFFORT_CONFIG_KEY)
+    else {
+        return false;
+    };
+    rest.trim_start().starts_with('=')
+}
+
 fn temporary_output_path(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{}.txt", Uuid::new_v4()))
 }
@@ -549,7 +655,10 @@ fn write_to_stderr(text: &str) -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
+    use crate::render::RenderedTurnFragment;
 
     #[test]
     fn codex_session_id_from_jsonl_stdout_rejects_empty_and_option_like_ids() {
@@ -596,7 +705,137 @@ mod tests {
         assert!(manages_codex_exec_session(&prompt));
     }
 
+    #[test]
+    fn codex_first_turn_reasoning_effort_overrides_existing_config() {
+        let command = codex_first_turn_command(
+            &argv(&[
+                "codex",
+                "exec",
+                "-c",
+                "model_reasoning_effort=\"medium\"",
+                "--config",
+                "sandbox_mode=\"workspace-write\"",
+                "-",
+            ]),
+            turn_settings(ReasoningEffort::High),
+            &test_fragment(),
+            Path::new("last-message.txt"),
+        )
+        .unwrap();
+
+        assert!(has_arg_pair(
+            &command,
+            "-c",
+            "model_reasoning_effort=\"high\""
+        ));
+        assert!(
+            !command
+                .iter()
+                .any(|arg| arg == "model_reasoning_effort=\"medium\"")
+        );
+        assert!(has_arg_pair(
+            &command,
+            "--config",
+            "sandbox_mode=\"workspace-write\""
+        ));
+        assert!(has_arg_pair(
+            &command,
+            "--output-last-message",
+            "last-message.txt"
+        ));
+    }
+
+    #[test]
+    fn codex_resume_reasoning_effort_does_not_mutate_saved_prefix_args() {
+        let resume_prefix_args =
+            argv(&["--color", "never", "-c", "model_reasoning_effort=\"low\""]);
+        let command = codex_resume_command(
+            "codex",
+            &resume_prefix_args,
+            "session-123",
+            turn_settings(ReasoningEffort::XHigh),
+            &test_fragment(),
+            Path::new("last-message.txt"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resume_prefix_args,
+            argv(&["--color", "never", "-c", "model_reasoning_effort=\"low\""])
+        );
+        assert!(has_arg_pair(
+            &command,
+            "-c",
+            "model_reasoning_effort=\"xhigh\""
+        ));
+        assert!(
+            !command
+                .iter()
+                .any(|arg| arg == "model_reasoning_effort=\"low\"")
+        );
+        assert!(command.iter().any(|arg| arg == "resume"));
+        assert!(command.iter().any(|arg| arg == "session-123"));
+    }
+
+    #[test]
+    fn codex_omitted_reasoning_effort_preserves_runner_config() {
+        let command = codex_first_turn_command(
+            &argv(&[
+                "codex",
+                "exec",
+                "-c",
+                "model_reasoning_effort=\"medium\"",
+                "-",
+            ]),
+            TurnRuntimeSettings::default(),
+            &test_fragment(),
+            Path::new("last-message.txt"),
+        )
+        .unwrap();
+
+        assert!(has_arg_pair(
+            &command,
+            "-c",
+            "model_reasoning_effort=\"medium\""
+        ));
+    }
+
+    #[test]
+    fn codex_rejects_reasoning_effort_max() {
+        let error = codex_first_turn_command(
+            &argv(&["codex", "exec", "-"]),
+            turn_settings(ReasoningEffort::Max),
+            &test_fragment(),
+            Path::new("last-message.txt"),
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("pseq.run.reasoning_effort=max"));
+        assert!(message.contains("Codex supports only minimal, low, medium, high, xhigh"));
+    }
+
     fn argv(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    fn turn_settings(reasoning_effort: ReasoningEffort) -> TurnRuntimeSettings {
+        TurnRuntimeSettings {
+            reasoning_effort: Some(reasoning_effort),
+        }
+    }
+
+    fn test_fragment() -> RenderedTurnFragment {
+        RenderedTurnFragment {
+            id: "frg_test".to_owned(),
+            name: "Turn".to_owned(),
+            path: "fragments/turn.md".to_owned(),
+        }
+    }
+
+    fn has_arg_pair(command: &[String], key: &str, value: &str) -> bool {
+        command
+            .windows(2)
+            .any(|pair| pair[0] == key && pair[1] == value)
     }
 }
