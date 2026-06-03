@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::error::AppError;
+use crate::turn_settings;
 
 use super::INCLUDE_PREFIX;
 use super::fragments::resolve_render_fragment;
@@ -29,17 +30,45 @@ pub(crate) fn render_sequence_turns(
         .map(|(index, fragment)| {
             Ok(RenderedTurn {
                 index: index + 1,
-                fragment: RenderedTurnFragment {
-                    id: fragment.id.clone(),
-                    name: fragment.name.clone(),
-                    path: fragment.path.clone(),
-                },
+                fragment: rendered_turn_fragment(fragment),
                 text: render_fragment_body(fragment, &sequence.catalog, variables)?,
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
 
     Ok(RenderedSequenceTurns {
+        id: sequence.id.clone(),
+        name: sequence.name.clone(),
+        path: sequence.path.clone(),
+        turns,
+    })
+}
+
+pub(crate) fn render_sequence_runtime_turns(
+    sequence: &RenderSequence,
+    variables: &BTreeMap<String, String>,
+) -> Result<RenderedSequenceRuntimeTurns, AppError> {
+    let turns = sequence
+        .fragments
+        .iter()
+        .enumerate()
+        .map(|(index, fragment)| {
+            let rendered_fragment = rendered_turn_fragment(fragment);
+            let settings = turn_settings::fragment_turn_settings(
+                fragment.pseq_metadata.as_ref(),
+                fragment.dotted_reasoning_effort.as_ref(),
+                &rendered_fragment,
+            )?;
+            Ok(RenderedRuntimeTurn {
+                index: index + 1,
+                fragment: rendered_fragment,
+                settings,
+                text: render_fragment_body(fragment, &sequence.catalog, variables)?,
+            })
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+
+    Ok(RenderedSequenceRuntimeTurns {
         id: sequence.id.clone(),
         name: sequence.name.clone(),
         path: sequence.path.clone(),
@@ -172,6 +201,14 @@ fn fragment_include_frame(fragment: &RenderFragment) -> FragmentIncludeFrame {
     FragmentIncludeFrame {
         id: fragment.id.clone(),
         label: fragment_label(fragment),
+    }
+}
+
+fn rendered_turn_fragment(fragment: &RenderFragment) -> RenderedTurnFragment {
+    RenderedTurnFragment {
+        id: fragment.id.clone(),
+        name: fragment.name.clone(),
+        path: fragment.path.clone(),
     }
 }
 

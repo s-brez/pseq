@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::path::Path;
 
 use crate::commit::CommitMode;
+use crate::turn_settings::TurnRuntimeSettings;
 
 #[derive(Debug)]
 pub struct RenderOptions<'a> {
@@ -59,6 +60,22 @@ pub struct RenderedTurnFragment {
     pub id: String,
     pub name: String,
     pub path: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RenderedSequenceRuntimeTurns {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) turns: Vec<RenderedRuntimeTurn>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RenderedRuntimeTurn {
+    pub(crate) index: usize,
+    pub(crate) fragment: RenderedTurnFragment,
+    pub(crate) settings: TurnRuntimeSettings,
+    pub(crate) text: String,
 }
 
 #[derive(Debug, Serialize)]

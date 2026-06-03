@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::yaml;
+
 #[derive(Debug)]
 pub(crate) struct RenderSequence {
     pub(super) id: String,
@@ -14,6 +16,8 @@ pub(super) struct RenderFragment {
     pub(super) id: String,
     pub(super) name: String,
     pub(super) path: String,
+    pub(super) pseq_metadata: Option<yaml::Value>,
+    pub(super) dotted_reasoning_effort: Option<yaml::Value>,
     pub(super) body: String,
 }
 
@@ -52,6 +56,10 @@ pub(super) struct HistoricalSequenceRecord {
 pub(super) struct RenderFragmentFrontmatter {
     pub(super) id: String,
     pub(super) name: String,
+    #[serde(default)]
+    pub(super) pseq: Option<yaml::Value>,
+    #[serde(default, rename = "pseq.run.reasoning_effort")]
+    pub(super) dotted_reasoning_effort: Option<yaml::Value>,
 }
 
 #[derive(Debug)]

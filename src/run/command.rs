@@ -9,13 +9,18 @@ use super::diagnostics::{
     should_write_diagnostics, write_runner_failure_diagnostic, write_runner_retry_diagnostic,
     write_turn_diagnostic,
 };
-use super::harnesses::{RunnerHarnessSession, prepare_runner_command};
+use super::harnesses::{
+    HarnessTurnRequest, RunnerHarnessSession, prepare_runner_command,
+    runner_command_supports_turn_settings, validate_active_codex_turn_settings,
+    validate_command_turn_settings,
+};
 use super::model::{OutputMode, ProcessTermination, ProcessTurnOutput};
 use super::options::{
     RunSettings, feedback_variable, load_base_variables, load_feedback_seed, output_mode,
     resolve_run_settings, resolve_runner, validate_options,
 };
 use super::types::*;
+use crate::runner::ResolvedRunner;
 
 pub fn run_sequence(
     store_path: &Path,
@@ -37,12 +42,13 @@ pub fn run_sequence(
         first_iteration_variables.insert(variable.clone(), previous_feedback.clone());
     }
     let first_sequence =
-        render::render_sequence_turns(&render_sequence, &first_iteration_variables)?;
+        render::render_sequence_runtime_turns(&render_sequence, &first_iteration_variables)?;
     if options.feedback_from.is_some() && first_sequence.turns.is_empty() {
         return Err(AppError::InvalidRunInvocation {
             message: "feedback requires a sequence with at least one turn".to_owned(),
         });
     }
+    preflight_turn_settings_support(&first_sequence, &runner, &options)?;
 
     let sequence_summary = RunSequenceSummary {
         id: first_sequence.id.clone(),
@@ -69,7 +75,7 @@ pub fn run_sequence(
             if let Some(variable) = &feedback_variable {
                 variables.insert(variable.clone(), previous_feedback.clone());
             }
-            render::render_sequence_turns(&render_sequence, &variables)?
+            render::render_sequence_runtime_turns(&render_sequence, &variables)?
         };
 
         let mut iteration_feedback = None;
@@ -104,6 +110,8 @@ pub fn run_sequence(
                 RunAttemptRequest {
                     command: &command,
                     prompt: &turn.text,
+                    fragment: &turn.fragment,
+                    turn_settings: turn.settings,
                     output_mode,
                     max_captured_output: options.max_captured_output,
                     has_later_turn,
@@ -189,6 +197,54 @@ pub fn run_sequence(
     ))
 }
 
+fn preflight_turn_settings_support(
+    sequence: &render::RenderedSequenceRuntimeTurns,
+    runner: &ResolvedRunner,
+    options: &RunOptions<'_>,
+) -> Result<(), AppError> {
+    let turns_per_iteration = sequence.turns.len();
+    let total_turns = turns_per_iteration * options.iterations;
+    let mut run_scope_codex_session = false;
+
+    for iteration in 1..=options.iterations {
+        let mut iteration_scope_codex_session = false;
+        for turn in &sequence.turns {
+            let global_turn_index = (iteration - 1) * turns_per_iteration + turn.index;
+            let scoped_turn_index = match options.session_scope {
+                SessionScope::Run => global_turn_index,
+                SessionScope::Iteration => turn.index,
+            };
+            let has_later_turn = match options.session_scope {
+                SessionScope::Run => global_turn_index < total_turns,
+                SessionScope::Iteration => turn.index < turns_per_iteration,
+            };
+            let command = runner.command_for_turn(scoped_turn_index);
+            let active_codex_session = match options.session_scope {
+                SessionScope::Run => run_scope_codex_session,
+                SessionScope::Iteration => iteration_scope_codex_session,
+            };
+
+            if active_codex_session {
+                validate_active_codex_turn_settings(turn.settings, &turn.fragment)?;
+            } else {
+                validate_command_turn_settings(command, turn.settings, &turn.fragment)?;
+            }
+
+            if !active_codex_session
+                && has_later_turn
+                && runner_command_supports_turn_settings(command)
+            {
+                match options.session_scope {
+                    SessionScope::Run => run_scope_codex_session = true,
+                    SessionScope::Iteration => iteration_scope_codex_session = true,
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug)]
 struct RunAttemptRecord {
     attempt: usize,
@@ -207,6 +263,8 @@ struct RetryDiagnosticContext {
 struct RunAttemptRequest<'a> {
     command: &'a [String],
     prompt: &'a str,
+    fragment: &'a render::RenderedTurnFragment,
+    turn_settings: crate::turn_settings::TurnRuntimeSettings,
     output_mode: OutputMode,
     max_captured_output: usize,
     has_later_turn: bool,
@@ -223,13 +281,15 @@ fn run_turn_attempts(
     let mut attempts = Vec::new();
 
     for attempt in 1..=max_attempts {
-        let (attempt_command, process) = runner_session.run_turn(
-            request.command,
-            request.prompt,
-            request.output_mode,
-            request.max_captured_output,
-            request.has_later_turn,
-        )?;
+        let (attempt_command, process) = runner_session.run_turn(HarnessTurnRequest {
+            argv: request.command,
+            prompt: request.prompt,
+            fragment: request.fragment,
+            settings: request.turn_settings,
+            output_mode: request.output_mode,
+            max_captured_output: request.max_captured_output,
+            needs_continuation: request.has_later_turn,
+        })?;
         let retryable = is_retryable_runner_failure(&process);
         let success = process.success;
         attempts.push(RunAttemptRecord {
@@ -272,7 +332,7 @@ fn is_retryable_runner_failure(process: &ProcessTurnOutput) -> bool {
 fn run_turn_output(
     iterations: usize,
     iteration: usize,
-    turn: &render::RenderedTurn,
+    turn: &render::RenderedRuntimeTurn,
     command: &[String],
     process: &ProcessTurnOutput,
     include_output: bool,
